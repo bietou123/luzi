@@ -1,0 +1,88 @@
+# 路子 · 每天一个能落地的搞钱方法
+
+一个纯离线、零权限的安卓 App。不推荐理财产品，不卖课，只收录**今天就能动手做**的搞钱路子和平价省钱攻略。
+
+- 100 条搞钱路子，每条配当日可执行的打卡清单
+- 46 条省钱攻略，带花费时长、收益区间和周期提醒
+- 记账、连续打卡、目标与金币激励全部本地运行
+
+> 所有收益数字都是预估区间，实际以平台当期规则为准。App 内置免责说明，不承诺任何收益。
+
+## 功能
+
+### 路子库
+- 按十类浏览、搜索、难度与启动资金筛选
+- 「今日路子」按日期轮换，每天一条，配当天就能做的一步
+- 打卡清单、连续天数、里程碑金币奖励
+- 收入 / 支出记账，月度统计与趋势图
+
+### 省钱攻略（v4.47 新增）
+- **今日可省**：按星期和日期自动筛出今天能做的活动，首页入口条直接可见
+- **搜索筛选排序**：分类、5 分钟内、收藏、推荐 / 省得多 / 最省事 / 最新验证
+- **资格状态机**：`没做过 / 还有资格 / 已用完`，标记「已用完」后自动从今日清单消失，避免白跑一趟
+- **时效提示**：每条攻略带最后验证日期，超过 90 天显示「可能已过期」并降权
+- **省钱台账**：记一笔（金额 + 备注 + 日期），累计与本月统计、按攻略排行
+
+### 内容原则
+- 只收录正规平台的公开活动，不写死会随活动调整的具体面额
+- 收益一律给区间，按偏低估算，不写「月省 1000」这类标题党
+- 明确不收录：批量账号、绕过风控、刷单套现、代登代操作、泄露个人数据、平台漏洞型玩法
+
+## 技术栈
+
+- Capacitor 6 + 原生 HTML/CSS/JS，无框架
+- esbuild 打包，产物自包含到 `www/`
+- 数据全部存 `localStorage`，App 不申请任何安卓权限（含网络权限）
+
+## 本地运行
+
+```bash
+npm install
+npm run build     # 打包到 www/，同时校验内容库与版本号
+npm run serve     # 本地预览 http://localhost:5173
+```
+
+## 打 APK
+
+需要 JDK 17 与 Android SDK。签名文件不入库，需自备 `android/keystore.properties` 与 `.jks`。
+
+```bash
+npm run build
+npx cap sync android
+cd android
+./gradlew assembleRelease
+```
+
+产物在 `android/app/build/outputs/apk/release/`。
+
+## 目录结构
+
+```
+src/
+├─ index.html
+├─ css/style.css
+├─ data/routes.js        100 条搞钱路子
+├─ data/deals.js         46 条省钱攻略
+└─ js/app.js             应用逻辑（单文件）
+tools/
+├─ build-www.cjs         esbuild 打包 + 内容校验
+├─ serve.cjs             本地静态服务器
+└─ test-v4470.cjs        CDP 无头冒烟测试
+android/                 Capacitor 安卓工程
+```
+
+## 测试
+
+冒烟测试走 Chrome DevTools Protocol，需要先起 `npm run serve`，再用无头 Chrome 打开 `http://localhost:5173`（`--headless=new --remote-debugging-port=9222`）：
+
+```bash
+node tools/test-v4470.cjs
+```
+
+## 免责声明
+
+本项目只做信息整理与记录，不参与也不代操作任何平台活动。攻略有效性以平台当期规则为准，据此操作产生的任何结果由使用者自负。若发现失效或违规内容，欢迎提 Issue。
+
+## 许可
+
+[MIT](LICENSE)

@@ -18,7 +18,7 @@ const CATS = {
 const STORAGE_KEY = 'luzi_app_v1';
 const REMOTE_URL_KEY = 'luzi_remote_url';
 // 版本号需与 android/app/build.gradle 的 versionName 保持一致（build-www.cjs 会校验）
-const APP_VERSION = '4.47.0';
+const APP_VERSION = '4.48.0';
 
 // ============ 工具函数 ============
 const $ = (sel) => document.querySelector(sel);
@@ -102,6 +102,9 @@ function defaultState() {
     dealLog: [],          // 省钱台账 [{ id, dealId, title, amount, note, date }]
     dealRewarded: [],     // 已发过金币的攻略 id（防重复）
     dealSearchHist: [],   // 攻略搜索历史
+    dealSaveGoal: 0,      // 本月省钱目标（元），0 = 未设置
+    dealSaveGoalCelebrated: '', // 已发过奖励的目标月份 'YYYY-MM'（防重复）
+    dealDayCleared: '',   // 已发过「今日清单全清」奖励的日期 'YYYY-MM-DD'（防重复）
   };
 }
 
@@ -244,6 +247,15 @@ function pushSearchHist(q) {
   const h = (state.searchHistory || []).filter(w => w !== q);
   h.unshift(q);
   state.searchHistory = h.slice(0, 6);
+  saveState();
+}
+
+function pushDealSearchHist(q) {
+  q = (q || '').trim();
+  if (!q) return;
+  const h = (state.dealSearchHist || []).filter(w => w !== q);
+  h.unshift(q);
+  state.dealSearchHist = h.slice(0, 8);
   saveState();
 }
 
@@ -3008,6 +3020,7 @@ function renderMine(routes) {
 let dealFilter = 'all';
 let dealSearch = '';
 let dealSort = 'recommend';
+let dealHistTimer = null;   // 搜索历史防抖定时器
 let currentDealId = null;
 
 const DEAL_STALE_DAYS = 90; // 超过 90 天未验证，标记「可能已过期」
@@ -3071,6 +3084,22 @@ function dealActiveToday(d) {
   return false;
 }
 
+// 未来 7 天内下一次可做是几天后；非周/月周期或超过 7 天返回 -1
+function dealNextDayOffset(d) {
+  const now = new Date();
+  const cur = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d.cycle === 'weekly') {
+    return (((d.cycleDetail || {}).weekday ?? 0) - cur.getDay() + 7) % 7;
+  }
+  if (d.cycle === 'monthly') {
+    const day = (d.cycleDetail || {}).day ?? 1;
+    let next = new Date(now.getFullYear(), now.getMonth(), day);
+    if (next < cur) next = new Date(now.getFullYear(), now.getMonth() + 1, day);
+    return Math.round((next - cur) / 86400000);
+  }
+  return -1;
+}
+
 // 今日可做清单：排除「已用完」的
 function todayDeals() {
   return DEALS
@@ -3096,11 +3125,145 @@ function saveMonthTotal() {
   return (state.dealLog || []).filter(x => x.date && x.date.startsWith(m)).reduce((s, x) => s + x.amount, 0);
 }
 
+// —— 台账月份浏览 ——
+let saveMonth = todayStr().slice(0, 7); // 'all' 或 'YYYY-MM'
+
+function recentMonths(n) {
+  const out = [];
+  const d = new Date();
+  d.setDate(1);
+  for (let i = 0; i < n; i++) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    d.setMonth(d.getMonth() - 1);
+  }
+  return out;
+}
+
+function saveMonthLabel(ym, i) {
+  const [y, m] = ym.split('-');
+  if (i === 0) return '本月';
+  return y === String(new Date().getFullYear()) ? `${Number(m)} 月` : `${y}/${Number(m)}`;
+}
+
+// —— 本月省钱目标 ——
+function dealMonthSaved() {
+  const m = todayStr().slice(0, 7);
+  return (state.dealLog || []).filter(x => (x.date || '').startsWith(m)).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+}
+
+function dealGoalCard() {
+  const goal = Number(state.dealSaveGoal) || 0;
+  if (!goal) {
+    return `<div class="deal-goal-card">
+      <div class="dgc-head"><span>🎯 本月省钱目标</span></div>
+      <div class="dgc-sub">定个小目标，省钱更有劲 · 达成额外 +50 🪙</div>
+      <button class="dgc-btn" data-deal-goal>设置目标</button>
+    </div>`;
+  }
+  const saved = dealMonthSaved();
+  const pct = Math.min(100, Math.round(saved / goal * 100));
+  const done = saved >= goal;
+  return `<div class="deal-goal-card ${done ? 'done' : ''}">
+    <div class="dgc-head">
+      <span>🎯 本月省钱目标</span>
+      <span class="dgc-edit" data-deal-goal>修改</span>
+    </div>
+    <div class="dgc-nums"><b>¥${fmt(saved)}</b><span>/ ¥${fmt(goal)}</span></div>
+    <div class="dgc-bar"><i style="width:${pct}%"></i></div>
+    <div class="dgc-sub">${done ? `已达成 🎉 超额 ¥${fmt(saved - goal)}` : `还差 ¥${fmt(goal - saved)} · 已完成 ${pct}%`}</div>
+  </div>`;
+}
+
+// 达标检查：每月只发一次奖励，返回应发金币数
+function checkDealSaveGoal() {
+  const goal = Number(state.dealSaveGoal) || 0;
+  if (!goal) return 0;
+  const m = todayStr().slice(0, 7);
+  if (state.dealSaveGoalCelebrated === m) return 0;
+  if (dealMonthSaved() < goal) return 0;
+  state.dealSaveGoalCelebrated = m;
+  return 50;
+}
+
+function openDealGoalSheet() {
+  const cur = Number(state.dealSaveGoal) || 0;
+  const presets = [50, 100, 200, 500];
+  const mask = el(`
+    <div class="modal-mask">
+      <div class="modal-sheet">
+        <div class="sheet-close" data-close>✕</div>
+        <h3>本月省钱目标</h3>
+        <div class="dgc-saved">本月已省 <b>¥${fmt(dealMonthSaved())}</b></div>
+        <div class="sheet-field">
+          <label class="sf-label">目标金额（元）</label>
+          <input id="deal-goal-input" type="number" inputmode="decimal" placeholder="如 100" value="${cur || ''}">
+          <div class="money-quick">
+            ${presets.map(v => `<button type="button" class="mq-chip ${cur === v ? 'on' : ''}" data-goal-preset="${v}">¥${v}</button>`).join('')}
+          </div>
+        </div>
+        <div class="dgc-tip">达成目标当月额外 +50 🪙（每月一次）</div>
+        <div class="sheet-btns">
+          <button class="btn-cancel" data-close>取消</button>
+          <button class="btn-ok" data-save>保存</button>
+        </div>
+      </div>
+    </div>`);
+  document.body.appendChild(mask);
+  mask.querySelectorAll('[data-goal-preset]').forEach(c => {
+    c.onclick = () => {
+      mask.querySelector('#deal-goal-input').value = c.dataset.goalPreset;
+      mask.querySelectorAll('.mq-chip').forEach(x => x.classList.toggle('on', x === c));
+    };
+  });
+  const close = () => mask.remove();
+  mask.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  mask.querySelector('[data-save]').onclick = () => {
+    const v = Math.round(parseFloat(mask.querySelector('#deal-goal-input').value));
+    if (!v || v <= 0) { toast('请输入有效目标金额'); return; }
+    state.dealSaveGoal = v;
+    const reward = checkDealSaveGoal();
+    saveState();
+    close();
+    if (reward) addCoins(reward, '达成本月省钱目标');
+    toast(reward ? `目标达成，+${reward} 🪙🎉` : `目标设为 ¥${v} 🎯`);
+    refreshDealViews();
+  };
+}
+
 // —— 首页入口条 ——
 function renderHomeDealStrip() {
   const list = todayDeals();
-  if (!list.length) return '';
   const saved = saveMonthTotal();
+  const goal = Number(state.dealSaveGoal) || 0;
+  // 今天已经清空时，预告本周还没到的活动，首页不留空白
+  if (!list.length) {
+    const up = DEALS
+      .filter(d => dealStatusOf(d) !== 'used' && dealNextDayOffset(d) >= 0)
+      .sort((a, b) => dealNextDayOffset(a) - dealNextDayOffset(b));
+    const upChips = up.slice(0, 8).map(d => {
+      const cat = DEAL_CATS[d.cat] || {};
+      const nd = dealNextDayOffset(d);
+      return `<div class="hd-chip" data-deal-open="${d.id}">
+        <span class="hd-ico" style="background:${cat.bg || 'rgba(245,185,60,.15)'}">${cat.icon || '🉐'}</span>
+        <span class="hd-name">${esc(d.title)}</span>
+        <span class="hd-amt">${nd === 0 ? '就是今天' : `${nd} 天后`}</span>
+      </div>`;
+    }).join('');
+    return `
+      <div class="home-deals">
+        <div class="hd-head">
+          <span>🉐 今天已清空${up.length ? ` · 本周还有 ${up.length} 条` : ''}</span>
+          <span class="hd-more" data-deal-more>全部攻略 ›</span>
+        </div>
+        ${up.length ? `<div class="hd-scroll">${upChips}</div>` : '<div class="hd-empty-note">今天的省钱活动都做完了，明天再来 💤</div>'}
+      </div>`;
+  }
+  // 一次性大额（装修/买车这类）算进「今日合计」会虚高，只累计 5 分钟内的顺手活
+  const quick = list.filter(d => Number(d.time) <= 5);
+  const sum = (arr, k) => Math.round(arr.reduce((s, d) => s + ((d.gain && Number(d.gain[k])) || 0), 0));
+  const qmin = sum(quick, 'min'), qmax = sum(quick, 'max');
+  const amtTxt = qmin === qmax ? `¥${qmin}` : `¥${qmin}-${qmax}`;
   const chips = list.slice(0, 8).map(d => {
     const cat = DEAL_CATS[d.cat] || {};
     return `<div class="hd-chip" data-deal-open="${d.id}">
@@ -3109,13 +3272,17 @@ function renderHomeDealStrip() {
       <span class="hd-amt">省 ¥${d.gain.min}-${d.gain.max}</span>
     </div>`;
   }).join('');
+  const goalTxt = goal ? `<i>/${fmt(goal)}</i>${saved >= goal ? '<span class="hd-goal-ok">✓</span>' : ''}` : '';
   return `
     <div class="home-deals">
       <div class="hd-head">
         <span>🉐 今日可省 · ${list.length} 条</span>
         <span class="hd-more" data-deal-more>全部攻略 ›</span>
       </div>
-      ${saved > 0 ? `<div class="hd-saved">本月已省 <b>¥${fmt(saved)}</b></div>` : ''}
+      <div class="hd-stats">
+        <div class="hd-stat">⚡ 5 分钟内的 ${quick.length} 条 <b>${amtTxt}</b></div>
+        <div class="hd-stat${goal && saved >= goal ? ' ok' : ''}">本月已省 <b>¥${fmt(saved)}</b>${goalTxt}</div>
+      </div>
       <div class="hd-scroll">${chips}</div>
     </div>`;
 }
@@ -3129,6 +3296,8 @@ function dealCard(d) {
   const active = dealActiveToday(d);
   const stale = dealStale(d);
   const cyc = dealCycleShort(d);
+  const nd = dealFilter === 'week' ? dealNextDayOffset(d) : -1;
+  const whenTxt = nd === 0 ? '就是今天' : nd > 0 && nd <= 6 ? `${nd} 天后` : '';
   let badge = '';
   if (used) badge = `<span class="dc-badge used">已用完</span>`;
   else if (ready) badge = `<span class="dc-badge ready">有资格</span>`;
@@ -3142,6 +3311,7 @@ function dealCard(d) {
           <span class="dc-gain">省 <b>${dealGainText(d)}</b>${d.periodGain ? `<i class="dc-period">+¥${d.periodGain.min}-${d.periodGain.max}/月</i>` : ''}</span>
           <span class="dc-time">⏱ ${d.time} 分钟</span>
           <span class="dc-cyc ${active && !used ? 'active' : ''}">📅 ${cyc}</span>
+          ${whenTxt ? `<span class="dc-when">⏳ ${whenTxt}</span>` : ''}
           ${stale ? '<span class="dc-stale">可能已过期</span>' : ''}
         </div>
       </div>
@@ -3150,11 +3320,71 @@ function dealCard(d) {
 }
 
 // —— 攻略库 ——
+function dealEmptyHtml() {
+  const q = (dealSearch || '').trim();
+  if (q) return `<div class="empty"><div class="e-ico">🔍</div><div class="e-text">没搜到「${esc(q)}」相关的省钱攻略</div><div class="empty-btn" data-deal-search-clear>清空搜索，看全部</div></div>`;
+  if (dealFilter === 'liked') return `<div class="empty"><div class="e-ico">♡</div><div class="e-text">还没有收藏的攻略<br>攻略右上角的 ♡ 点一下就收藏</div><div class="empty-btn" data-deal-filter="all">去看全部攻略</div></div>`;
+  if (dealFilter === 'today') return `<div class="empty"><div class="e-ico">🌙</div><div class="e-text">今天没有可做的攻略了<br>明天再来看看</div><div class="empty-btn" data-deal-filter="all">浏览全部攻略</div></div>`;
+  if (dealFilter === 'week') return `<div class="empty"><div class="e-ico">📆</div><div class="e-text">未来 7 天没有固定的周/月活动</div><div class="empty-btn" data-deal-filter="all">看全部攻略</div></div>`;
+  if (dealFilter === 'fast') return `<div class="empty"><div class="e-ico">⚡</div><div class="e-text">没有 5 分钟内能做完的攻略</div><div class="empty-btn" data-deal-filter="all">看全部攻略</div></div>`;
+  if (dealFilter !== 'all') {
+    const cn = (DEAL_CATS[dealFilter] || {}).name || '这个分类';
+    return `<div class="empty"><div class="e-ico">🉐</div><div class="e-text">「${esc(cn)}」分类暂时没有攻略</div><div class="empty-btn" data-deal-filter="all">看全部攻略</div></div>`;
+  }
+  return `<div class="empty"><div class="e-ico">🔍</div><div class="e-text">还没有省钱攻略</div></div>`;
+}
+
+// 今日固定清单：每天/每周/每月循环的攻略，一次性与限时活动不计入
+function dealDayProgress() {
+  const all = DEALS.filter(d =>
+    (d.cycle === 'daily' || d.cycle === 'weekly' || d.cycle === 'monthly') && dealActiveToday(d));
+  const done = all.filter(d => dealStatusOf(d) === 'used').length;
+  return { total: all.length, done, left: all.length - done };
+}
+
+// 今日清单全部标记用完 → 每天一次 +100 金币
+function checkDealDayCleared() {
+  const p = dealDayProgress();
+  const today = todayStr();
+  if (!p.total || p.done < p.total) return 0;
+  if (state.dealDayCleared === today) return 0;
+  state.dealDayCleared = today;
+  return 100;
+}
+
+function dealDayCard() {
+  const p = dealDayProgress();
+  if (!p.total) return '';
+  const pct = Math.round(p.done / p.total * 100);
+  const cleared = p.done >= p.total;
+  const rewarded = state.dealDayCleared === todayStr();
+  return `
+    <div class="deal-day-card${cleared ? ' done' : ''}">
+      <div class="ddc-head"><span>📋 今日固定清单</span><span class="ddc-num">${p.done} / ${p.total}</span></div>
+      <div class="ddc-bar"><i style="width:${pct}%"></i></div>
+      <div class="ddc-sub">${cleared
+        ? (rewarded ? '今天全清啦，明天再来 ✅' : '全清！')
+        : `还差 ${p.left} 条 · 全部标记「已用完」可得 +100 🪙`}</div>
+    </div>`;
+}
+
 function renderDeals() {
   const todayN = todayDeals().length;
+  const weekN = DEALS.filter(d => {
+    if (dealStatusOf(d) === 'used') return false;
+    const n = dealNextDayOffset(d);
+    return n >= 0 && n <= 6;
+  }).length;
   let list = DEALS.slice();
 
   if (dealFilter === 'today') list = list.filter(d => dealActiveToday(d) && dealStatusOf(d) !== 'used');
+  else if (dealFilter === 'week') {
+    list = list.filter(d => {
+      if (dealStatusOf(d) === 'used') return false;
+      const n = dealNextDayOffset(d);
+      return n >= 0 && n <= 6;
+    });
+  }
   else if (dealFilter === 'liked') list = list.filter(d => state.dealLiked[d.id]);
   else if (dealFilter === 'fast') list = list.filter(d => d.time <= 5);
   else if (dealFilter !== 'all') list = list.filter(d => d.cat === dealFilter);
@@ -3172,12 +3402,15 @@ function renderDeals() {
   else if (dealSort === 'gain') list.sort((a, b) => dealMid(b) - dealMid(a));
   else if (dealSort === 'time') list.sort((a, b) => a.time - b.time);
   else if (dealSort === 'verify') list.sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt));
+  // 本周活动：按最近可做日排序（今天在前）
+  if (dealFilter === 'week') list.sort((a, b) => dealNextDayOffset(a) - dealNextDayOffset(b));
   // 已用完的沉底（sort 稳定，不影响组内顺序）
   list.sort((a, b) => (dealStatusOf(a) === 'used' ? 1 : 0) - (dealStatusOf(b) === 'used' ? 1 : 0));
 
   const chips = [
     { k: 'all', name: '全部' },
     { k: 'today', name: `🔥 今天可做 ${todayN}` },
+    { k: 'week', name: `📆 本周活动 ${weekN}` },
     { k: 'fast', name: '⚡ 5 分钟内' },
     { k: 'liked', name: `❤️ 收藏 ${Object.keys(state.dealLiked).length}` },
     ...Object.entries(DEAL_CATS).map(([k, v]) => ({ k, name: `${v.icon} ${v.name}` })),
@@ -3204,16 +3437,25 @@ function renderDeals() {
       <div class="ss-sub">累计 ¥${fmt(saveTotal())} · ${(state.dealLog || []).length} 笔</div>
     </div>
 
+    ${dealDayCard()}
+
     <div class="search-box">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
       <input id="deal-search-input" placeholder="搜攻略，如「外卖」「会员」「话费」" value="${esc(dealSearch)}">
+      ${dealSearch ? `<div class="sb-clear" data-deal-search-clear>✕</div>` : ''}
     </div>
+
+    ${!dealSearch && (state.dealSearchHist || []).length ? `
+      <div class="search-hist">
+        <span class="sh-lb">最近搜</span>
+        ${state.dealSearchHist.map(w => `<span class="sh-chip" data-deal-hist="${esc(w)}">${esc(w)}</span>`).join('')}
+        <span class="sh-clear" data-clear-deal-hist>清空</span>
+      </div>` : ''}
 
     <div class="filter-bar">${chips}</div>
     <div class="filter-bar" style="padding-top:0">${sortChips}</div>
 
-    ${list.length ? list.map(dealCard).join('') :
-      `<div class="empty"><div class="e-ico">🔍</div><div class="e-text">没找到相关攻略，换个关键词试试</div></div>`}
+    ${list.length ? list.map(dealCard).join('') : dealEmptyHtml()}
 
     <div class="deal-disclaimer">收益为预估区间（按偏低估算），实际以平台当期规则为准 · 攻略仅供参考，不保证可得</div>
   `;
@@ -3226,6 +3468,11 @@ function renderDealDetail(d) {
   const st = dealStatusOf(d);
   const stale = dealStale(d);
   const liked = !!state.dealLiked[d.id];
+  // 我在这条攻略上的省钱记录
+  const myLogs = (state.dealLog || []).filter(x => x.dealId === d.id);
+  const myTotal = myLogs.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const myLast = myLogs.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+  const related = dealRelated(d, 3);
 
   return `
     <div class="detail-hero">
@@ -3277,10 +3524,33 @@ function renderDealDetail(d) {
       <div class="dic-row"><span>最后验证</span><b class="${stale ? 'red' : 'green'}">${d.verifiedAt.slice(5)}</b></div>
     </div>
 
+    ${myLogs.length ? `
+    <div class="deal-mine-card">
+      <div class="dmc-main">💸 我在这条已省 <b>¥${fmt(myTotal)}</b></div>
+      <div class="dmc-sub">${myLogs.length} 次记录${myLast ? ` · 最近 ${esc(String(myLast.date || '').slice(5))}` : ''}</div>
+    </div>` : ''}
+
     <div class="deal-actions">
-      <button class="deal-log-btn" data-deal-log="${d.id}">💸 记一笔省下的钱</button>
+      <button class="deal-log-btn" data-deal-log="${d.id}">${myLogs.length ? '💸 再记一笔' : '💸 记一笔省下的钱'}</button>
       <button class="deal-like-btn ${liked ? 'on' : ''}" data-deal-like="${d.id}">${liked ? '♥ 已收藏' : '♡ 收藏'}</button>
     </div>
+
+    ${related.length ? `
+    <div class="deal-related">
+      <div class="dr-head">🔗 相关攻略 · 一起做更省</div>
+      ${related.map(r => {
+        const rc = DEAL_CATS[r.cat] || {};
+        const rUsed = dealStatusOf(r) === 'used';
+        return `<div class="dr-item${rUsed ? ' used' : ''}" data-deal-open="${r.id}">
+          <span class="dr-ico" style="background:${rc.bg || 'rgba(245,185,60,.15)'};color:${rc.color || '#f5b93c'}">${rc.icon || '🉐'}</span>
+          <div class="dr-main">
+            <div class="dr-title">${esc(r.title)}${rUsed ? '<i class="dr-used">已用完</i>' : ''}</div>
+            <div class="dr-tag">${esc(r.tag)}</div>
+          </div>
+          <span class="dr-amt">省 ¥${r.gain.min}-${r.gain.max}</span>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
 
     <div class="detail-sec">
       <div class="sec-h"><div class="sec-num green">!</div>通用避坑</div>
@@ -3289,6 +3559,25 @@ function renderDealDetail(d) {
 
     <div class="deal-disclaimer">收益为预估区间，实际以平台当期规则为准 · 攻略仅供参考，不保证可得</div>
   `;
+}
+
+// 相关攻略：同分类优先，标签重叠次之，已用完的降权
+function dealRelated(d, n = 3) {
+  const ownTags = d.tags || [];
+  return DEALS
+    .filter(x => x.id !== d.id)
+    .map(x => {
+      let score = 0;
+      if (x.cat === d.cat) score += 3;
+      score += (x.tags || []).filter(t => ownTags.includes(t)).length * 2;
+      if (x.cycle === d.cycle) score += 1;
+      if (dealStatusOf(x) === 'used') score -= 1;
+      return { x, score };
+    })
+    .filter(o => o.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n)
+    .map(o => o.x);
 }
 
 function openDealDetail(id) {
@@ -3332,17 +3621,27 @@ function setDealStatus(id, st) {
     toast(st === 'used' ? '已标记为用完，不再出现在今日清单' : '已标记为还有资格');
   }
   saveState();
+  if (st === 'used') {
+    const dayReward = checkDealDayCleared();
+    if (dayReward) {
+      saveState();
+      addCoins(dayReward, '今日固定清单全清');
+      celebrate();
+      toast(`今日固定清单全清！+${dayReward} 🪙`);
+    }
+  }
   if (currentView === 'dealDetail') openDealDetail(id);
   else render(currentView);
 }
 
 // —— 省钱台账 ——
 function renderSaveRecords() {
-  const logs = (state.dealLog || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const all = (state.dealLog || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const logs = saveMonth === 'all' ? all : all.filter(x => (x.date || '').startsWith(saveMonth));
   const total = logs.reduce((s, x) => s + x.amount, 0);
-  const month = todayStr().slice(0, 7);
-  const monthLogs = logs.filter(x => x.date && x.date.startsWith(month));
-  const monthTotal = monthLogs.reduce((s, x) => s + x.amount, 0);
+  const allTotal = all.reduce((s, x) => s + x.amount, 0);
+  const avg = logs.length ? Math.round(total / logs.length) : 0;
+  const rangeName = saveMonth === 'all' ? '累计' : `${Number(saveMonth.slice(5))} 月`;
 
   const agg = {};
   logs.forEach(x => {
@@ -3352,6 +3651,11 @@ function renderSaveRecords() {
     agg[k].count++;
   });
   const top = Object.values(agg).sort((a, b) => b.amount - a.amount).slice(0, 5);
+
+  const monthChips = [
+    { k: 'all', name: '全部' },
+    ...recentMonths(6).map((ym, i) => ({ k: ym, name: saveMonthLabel(ym, i) })),
+  ].map(c => `<div class="filter-chip ${saveMonth === c.k ? 'active' : ''}" data-save-month="${c.k}">${c.name}</div>`).join('');
 
   return `
     <div class="page-head">
@@ -3363,13 +3667,17 @@ function renderSaveRecords() {
     </div>
 
     <div class="save-total">
-      <div class="st-main">本月已省 <b>¥${fmt(monthTotal)}</b></div>
-      <div class="st-sub">累计 ¥${fmt(total)} · 共 ${logs.length} 笔 · 本月 ${monthLogs.length} 笔</div>
+      <div class="st-main">${rangeName}已省 <b>¥${fmt(total)}</b></div>
+      <div class="st-sub">${logs.length} 笔 · 平均每笔 ¥${fmt(avg)}${saveMonth !== 'all' ? ` · 全部累计 ¥${fmt(allTotal)}` : ''}</div>
     </div>
+
+    ${dealGoalCard()}
+
+    <div class="filter-bar save-months">${monthChips}</div>
 
     ${top.length ? `
     <div class="save-top">
-      <div class="stp-head">💰 省得最多的</div>
+      <div class="stp-head">💰 ${saveMonth === 'all' ? '省得最多的' : `${rangeName}省得最多的`}</div>
       ${top.map((v, i) => `
         <div class="stp-row">
           <span class="stp-rank ${i === 0 ? 'top' : ''}">${i + 1}</span>
@@ -3387,45 +3695,52 @@ function renderSaveRecords() {
           ${x.note ? `<div class="sr-note">${esc(x.note)}</div>` : ''}
         </div>
         <div class="sr-amt">¥${x.amount}</div>
-        <div class="sr-del" data-deal-del="${x.id}">✕</div>
+        <div class="sr-acts">
+          <div class="sr-edit" data-deal-edit="${x.id}">✎</div>
+          <div class="sr-del" data-deal-del="${x.id}">✕</div>
+        </div>
       </div>`).join('') :
-      `<div class="empty"><div class="e-ico">💸</div><div class="e-text">还没有省钱记录<br>记下第一笔，看着数字变大</div></div>`}
+      `<div class="empty"><div class="e-ico">💸</div><div class="e-text">${saveMonth === 'all' ? '还没有省钱记录<br>记下第一笔，看着数字变大' : `${rangeName}还没有省钱记录<br>点右上角记一笔`}</div></div>`}
 
     <div class="deal-disclaimer">这里记的是「省下的钱」，和「收益记录」里的收入分开计算</div>
   `;
 }
 
-function openDealLogSheet(dealId) {
-  const d = dealId ? DEALS.find(x => x.id === dealId) : null;
-  const opts = DEALS.map(x =>
+function openDealLogSheet(dealId, editId) {
+  const editing = editId ? (state.dealLog || []).find(x => x.id === editId) : null;
+  if (editId && !editing) return;
+  // 编辑时用记录自身关联的攻略；新增时用传入的攻略
+  const sourceId = editing ? (editing.dealId || '') : (dealId || '');
+  const d = sourceId ? DEALS.find(x => x.id === sourceId) : null;
+  const opts = `<option value="">（不关联攻略）</option>` + DEALS.map(x =>
     `<option value="${x.id}" ${d && x.id === d.id ? 'selected' : ''}>${esc(x.title)}</option>`).join('');
   const mask = el(`
     <div class="modal-mask">
       <div class="modal-sheet">
         <div class="sheet-close" data-close>✕</div>
-        <h3>记一笔省下的钱</h3>
+        <h3>${editing ? '修改这笔省钱记录' : '记一笔省下的钱'}</h3>
         <div class="sheet-field">
           <label class="sf-label">来源攻略</label>
           <select id="deal-log-item">${opts}</select>
         </div>
         <div class="sheet-field">
           <label class="sf-label">省下多少（元）</label>
-          <input id="deal-log-amount" type="number" inputmode="decimal" placeholder="如 8">
+          <input id="deal-log-amount" type="number" inputmode="decimal" placeholder="如 8" value="${editing ? editing.amount : ''}">
           <div class="money-quick">
-            ${[5, 10, 20, 50].map(v => `<button type="button" class="mq-chip" data-quick-amt="${v}">¥${v}</button>`).join('')}
+            ${[5, 10, 20, 50].map(v => `<button type="button" class="mq-chip ${editing && editing.amount === v ? 'on' : ''}" data-quick-amt="${v}">¥${v}</button>`).join('')}
           </div>
         </div>
         <div class="sheet-field">
           <label class="sf-label">备注</label>
-          <input id="deal-log-note" type="text" placeholder="如：周三外卖满减">
+          <input id="deal-log-note" type="text" placeholder="如：周三外卖满减" value="${editing ? esc(editing.note || '') : ''}">
         </div>
         <div class="sheet-field">
           <label class="sf-label">日期</label>
-          <input id="deal-log-date" type="date" value="${todayStr()}">
+          <input id="deal-log-date" type="date" value="${editing ? esc(editing.date || todayStr()) : todayStr()}">
         </div>
         <div class="sheet-btns">
           <button class="btn-cancel" data-close>取消</button>
-          <button class="btn-ok" data-save>保存</button>
+          <button class="btn-ok" data-save>${editing ? '保存修改' : '保存'}</button>
         </div>
       </div>
     </div>`);
@@ -3451,6 +3766,22 @@ function openDealLogSheet(dealId) {
     if (!amount || amount <= 0) { toast('请输入有效金额'); return; }
     const deal = sel.value ? DEALS.find(x => x.id === sel.value) : null;
     state.dealLog = state.dealLog || [];
+    if (editing) {
+      // 编辑只改内容，不再发金币（防止改记录反复领奖）
+      Object.assign(editing, {
+        dealId: deal ? deal.id : '',
+        title: deal ? deal.title : (note || '省钱'),
+        amount,
+        note,
+        date,
+      });
+      saveState();
+      close();
+      saveMonth = (date || todayStr()).slice(0, 7);
+      toast(`已更新：省下 ¥${amount} 💸`);
+      refreshDealViews();
+      return;
+    }
     state.dealLog.unshift({
       id: Date.now() + Math.random().toString(16).slice(2),
       dealId: deal ? deal.id : '',
@@ -3466,14 +3797,22 @@ function openDealLogSheet(dealId) {
       state.dealRewarded.push(deal.id);
       reward = 5;
     }
+    // 月度省钱目标达标奖励（每月一次）
+    const goalReward = checkDealSaveGoal();
     saveState();
     close();
+    saveMonth = (date || todayStr()).slice(0, 7);
     if (reward) addCoins(reward, '记录省钱攻略');
-    toast(reward ? `省下 ¥${amount}，+${reward} 🪙` : `省下 ¥${amount} 💸`);
-    if (currentView === 'saveRecords' || currentView === 'mine' || currentView === 'deals') render(currentView);
-    else if (currentView === 'dealDetail' && currentDealId) openDealDetail(currentDealId);
-    else if (currentView === 'home') render('home');
+    if (goalReward) addCoins(goalReward, '达成本月省钱目标');
+    const plus = reward + goalReward;
+    toast(goalReward ? `省下 ¥${amount}，达成目标 +${plus} 🪙🎉` : plus ? `省下 ¥${amount}，+${plus} 🪙` : `省下 ¥${amount} 💸`);
+    refreshDealViews();
   };
+}
+
+function refreshDealViews() {
+  if (currentView === 'dealDetail' && currentDealId) openDealDetail(currentDealId);
+  else if (['saveRecords', 'mine', 'deals', 'home'].includes(currentView)) render(currentView);
 }
 
 function delDealLog(id) {
@@ -3646,10 +3985,18 @@ function bindViewEvents(viewName) {
     if (dealLogBtn) { openDealLogSheet(dealLogBtn.dataset.dealLog); return; }
     const dealDel = e.target.closest('[data-deal-del]');
     if (dealDel) { delDealLog(dealDel.dataset.dealDel); return; }
+    const dealEdit = e.target.closest('[data-deal-edit]');
+    if (dealEdit) {
+      const it = (state.dealLog || []).find(x => x.id === dealEdit.dataset.dealEdit);
+      openDealLogSheet(it ? it.dealId : '', dealEdit.dataset.dealEdit);
+      return;
+    }
     const dealOpen = e.target.closest('[data-deal-open]');
     if (dealOpen) { openDealDetail(dealOpen.dataset.dealOpen); return; }
     const dealMore = e.target.closest('[data-deal-more]');
     if (dealMore) { dealFilter = 'all'; dealSearch = ''; render('deals'); return; }
+    const saveMonthBtn = e.target.closest('[data-save-month]');
+    if (saveMonthBtn) { saveMonth = saveMonthBtn.dataset.saveMonth; render('saveRecords'); return; }
     const like = e.target.closest('[data-like]');
     if (like) { toggleLike(like.dataset.like); return; }
     const like2 = e.target.closest('[data-like2]');
@@ -3857,6 +4204,9 @@ function bindViewEvents(viewName) {
   }
 
   // 省钱攻略：分类筛选 / 排序 / 搜索
+  view.querySelectorAll('[data-deal-goal]').forEach(b => {
+    b.onclick = () => openDealGoalSheet();
+  });
   view.querySelectorAll('[data-deal-filter]').forEach(c => {
     c.onclick = () => { dealFilter = c.dataset.dealFilter; dealSearch = ''; render('deals'); };
   });
@@ -3871,12 +4221,29 @@ function bindViewEvents(viewName) {
       // 重绘后恢复焦点与光标位置，避免搜索框一顿一顿
       const ni = view.querySelector('#deal-search-input');
       if (ni) { ni.focus(); ni.setSelectionRange(ni.value.length, ni.value.length); }
+      // 输入停顿 800ms 记入搜索历史（只写 localStorage，不重绘）
+      clearTimeout(dealHistTimer);
+      dealHistTimer = setTimeout(() => { if ((dealSearch || '').trim()) pushDealSearchHist(dealSearch); }, 800);
+    };
+    dealSearchInput.onkeydown = (e) => {
+      if (e.key === 'Enter') { dealHistTimer && clearTimeout(dealHistTimer); pushDealSearchHist(dealSearch); dealSearchInput.blur(); }
     };
   }
-  const dealSearchClear = view.querySelector('[data-deal-search-clear]');
-  if (dealSearchClear) {
-    dealSearchClear.onclick = () => { dealSearch = ''; render('deals'); };
+  view.querySelectorAll('[data-deal-hist]').forEach(c => {
+    c.onclick = () => { dealSearch = c.dataset.dealHist; pushDealSearchHist(dealSearch); render('deals'); };
+  });
+  const clearDealHist = view.querySelector('[data-clear-deal-hist]');
+  if (clearDealHist) {
+    clearDealHist.onclick = () => { state.dealSearchHist = []; saveState(); render('deals'); };
   }
+  view.querySelectorAll('[data-deal-search-clear]').forEach(btn => {
+    btn.onclick = () => {
+      dealSearch = '';
+      render('deals');
+      const ni = view.querySelector('#deal-search-input');
+      if (ni) ni.focus();
+    };
+  });
 }
 
 function handleGo(go) {

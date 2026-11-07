@@ -419,6 +419,10 @@ main#view {
   font-size:14px;
 }
 .search-box input::placeholder { color:var(--text3); }
+.sb-clear { flex-shrink:0; width:19px; height:19px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.08); color:var(--text3); font-size:11px; cursor:pointer; }
+.sb-clear:active { background:rgba(255,255,255,.16); color:var(--text); }
+.empty-btn { margin-top:14px; display:inline-block; padding:9px 18px; border-radius:12px; background:rgba(245,185,60,.14); color:var(--gold); font-size:13px; font-weight:800; cursor:pointer; }
+.empty-btn:active { background:rgba(245,185,60,.24); }
 
 /* 详情页 */
 .detail-hero {
@@ -2320,8 +2324,37 @@ main#view {
 .home-deals { margin:0 16px 14px; padding:13px 13px 10px; border-radius:16px; background:var(--card); border:1px solid var(--border); }
 .hd-head { display:flex; align-items:center; justify-content:space-between; font-size:13px; font-weight:800; color:var(--text); }
 .hd-more { font-size:12px; color:var(--gold); font-weight:700; cursor:pointer; padding:2px 0; }
-.hd-saved { font-size:11px; color:var(--text2); margin-top:5px; }
-.hd-saved b { color:var(--gold); font-size:13px; }
+.hd-stats { display:flex; align-items:baseline; gap:16px; margin-top:6px; flex-wrap:wrap; }
+.hd-stat { font-size:11px; color:var(--text3); font-weight:700; }
+.hd-stat b { color:var(--gold); font-size:14px; margin-left:2px; }
+.hd-stat i { font-style:normal; color:var(--text3); font-size:11px; }
+.hd-stat.ok b { color:var(--green2); }
+.hd-goal-ok { color:var(--green2); font-weight:800; margin-left:3px; }
+.hd-empty-note { font-size:12px; color:var(--text3); margin-top:9px; padding:8px 2px; }
+
+/* —— 今日固定清单进度 —— */
+.deal-day-card { margin:0 16px 12px; padding:12px 14px; border-radius:14px; background:var(--card); border:1px solid var(--border); }
+.deal-day-card.done { border-color:rgba(46,204,113,.35); background:rgba(46,204,113,.06); }
+.ddc-head { display:flex; align-items:center; justify-content:space-between; font-size:12px; font-weight:800; color:var(--text2); }
+.ddc-num { color:var(--gold); }
+.deal-day-card.done .ddc-num { color:var(--green2); }
+.ddc-bar { height:6px; border-radius:4px; background:rgba(255,255,255,.07); overflow:hidden; margin:8px 0 6px; }
+.ddc-bar i { display:block; height:100%; border-radius:4px; background:linear-gradient(90deg,var(--gold),#ffd76e); transition:width .3s; }
+.deal-day-card.done .ddc-bar i { background:var(--green2); }
+.ddc-sub { font-size:11px; color:var(--text3); }
+
+/* —— 详情页相关攻略 —— */
+.deal-related { margin:0 16px 14px; padding:13px 13px 6px; border-radius:16px; background:var(--card); border:1px solid var(--border); }
+.dr-head { font-size:12px; font-weight:800; color:var(--text2); margin-bottom:9px; }
+.dr-item { display:flex; align-items:center; gap:9px; padding:9px 2px; border-top:1px solid var(--border); cursor:pointer; }
+.dr-item:first-of-type { border-top:none; }
+.dr-item.used { opacity:.55; }
+.dr-ico { flex:0 0 28px; width:28px; height:28px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:14px; }
+.dr-main { flex:1; min-width:0; }
+.dr-title { font-size:12.5px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dr-used { font-style:normal; font-size:10px; color:var(--text3); margin-left:6px; font-weight:600; }
+.dr-tag { font-size:11px; color:var(--text3); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dr-amt { flex:0 0 auto; font-size:11px; color:var(--gold); font-weight:800; white-space:nowrap; }
 .hd-scroll { display:flex; gap:8px; overflow-x:auto; margin-top:9px; padding-bottom:3px; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
 .hd-scroll::-webkit-scrollbar { display:none; }
 .hd-chip { flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:11px; background:rgba(255,255,255,.04); border:1px solid var(--border); cursor:pointer; transition:transform .12s; }
@@ -2356,6 +2389,7 @@ main#view {
 .dc-hourly.hot { color:var(--gold); font-weight:800; }
 .dc-cyc { color:var(--text3); }
 .dc-cyc.active { color:var(--gold); }
+.dc-when { color:var(--gold); background:rgba(245,185,60,.12); padding:1px 6px; border-radius:6px; font-weight:800; }
 .dc-stale { color:#ffb84d; }
 .dc-heart { flex:0 0 auto; font-size:17px; line-height:1; color:var(--text3); padding:2px 3px; }
 .dc-heart.on { color:var(--red); }
@@ -2382,13 +2416,35 @@ main#view {
 .sec-num.green { background:linear-gradient(135deg,#2ecc71,#27ae60); color:#04201a; }
 .deal-step .step-no { background:rgba(245,185,60,.14); border-color:rgba(245,185,60,.3); color:var(--gold); }
 .deal-actions { display:flex; gap:9px; margin:0 16px 16px; }
+.deal-mine-card { margin:0 16px 12px; padding:12px 14px; border-radius:16px; background:var(--card); border:1px solid rgba(46,204,113,.28); }
+.dmc-main { font-size:14px; font-weight:700; color:var(--text2); }
+.dmc-main b { color:var(--green2); font-size:19px; font-weight:900; margin-left:2px; }
+.dmc-sub { margin-top:3px; font-size:11px; color:var(--text3); }
 .deal-log-btn { flex:1; padding:13px 0; border:none; border-radius:13px; background:var(--grad-gold); color:#1a1206; font-size:14px; font-weight:800; cursor:pointer; font-family:inherit; }
 .deal-log-btn:active { transform:scale(.98); }
 .deal-like-btn { flex:0 0 auto; padding:13px 16px; border-radius:13px; border:1px solid var(--border); background:var(--card); color:var(--text2); font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; }
 .deal-like-btn.on { color:var(--red); border-color:rgba(255,91,106,.4); background:rgba(255,91,106,.08); }
 
 /* —— 台账 —— */
+.deal-goal-card { margin:0 16px 14px; padding:13px 14px; border-radius:16px; background:var(--card); border:1px solid var(--border); }
+.deal-goal-card.done { border-color:rgba(46,204,113,.34); background:linear-gradient(180deg,rgba(46,204,113,.08),var(--card)); }
+.dgc-head { display:flex; align-items:center; justify-content:space-between; font-size:13px; font-weight:800; color:var(--text); }
+.dgc-edit { font-size:11px; font-weight:700; color:var(--gold); padding:2px 7px; border-radius:6px; background:rgba(245,185,60,.12); cursor:pointer; }
+.dgc-nums { margin-top:8px; display:flex; align-items:baseline; gap:4px; }
+.dgc-nums b { font-size:21px; font-weight:900; color:var(--green2); }
+.dgc-nums span { font-size:12px; color:var(--text3); }
+.dgc-bar { margin-top:7px; height:7px; border-radius:99px; background:rgba(255,255,255,.07); overflow:hidden; }
+.dgc-bar i { display:block; height:100%; border-radius:99px; background:var(--grad-gold); transition:width .35s ease; }
+.deal-goal-card.done .dgc-bar i { background:linear-gradient(90deg,#2ecc71,#7ee8a2); }
+.dgc-sub { margin-top:6px; font-size:11px; color:var(--text3); }
+.dgc-btn { margin-top:10px; width:100%; padding:10px 0; border-radius:11px; border:1px dashed rgba(245,185,60,.4); background:rgba(245,185,60,.08); color:var(--gold); font-size:13px; font-weight:800; font-family:inherit; cursor:pointer; }
+.dgc-btn:active { background:rgba(245,185,60,.16); }
+.dgc-saved { margin-bottom:12px; font-size:13px; color:var(--text2); }
+.dgc-saved b { color:var(--green2); font-size:16px; }
+.dgc-tip { margin-top:-4px; font-size:11px; color:var(--text3); }
+
 .save-total { margin:0 16px 12px; padding:15px 16px; border-radius:16px; background:linear-gradient(135deg, rgba(46,204,113,.14), rgba(245,185,60,.08)); border:1px solid rgba(46,204,113,.22); }
+.save-months { padding-top:0; padding-bottom:10px; }
 .st-main { font-size:13px; color:var(--text2); font-weight:700; }
 .st-main b { font-size:24px; color:var(--green2); margin-left:5px; }
 .st-sub { font-size:11px; color:var(--text3); margin-top:4px; }
@@ -2406,7 +2462,10 @@ main#view {
 .sr-title { font-size:13px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sr-note { font-size:11px; color:var(--text3); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sr-amt { flex:0 0 auto; font-size:14px; font-weight:800; color:var(--green2); }
-.sr-del { flex:0 0 auto; font-size:12px; color:var(--text3); padding:4px 5px; cursor:pointer; }
+.sr-acts { flex:0 0 auto; display:flex; align-items:center; gap:1px; }
+.sr-edit, .sr-del { font-size:12px; color:var(--text3); padding:4px 5px; cursor:pointer; border-radius:6px; }
+.sr-edit { color:var(--text2); }
+.sr-edit:active, .sr-del:active { background:rgba(255,255,255,.07); }
 
 /* —— 通用 —— */
 .deal-disclaimer { margin:16px 20px 24px; font-size:10.5px; color:var(--text3); text-align:center; line-height:1.7; }

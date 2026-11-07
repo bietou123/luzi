@@ -1,0 +1,33 @@
+{
+  "name": "luzi-app",
+  "version": "1.0.0",
+  "description": "路子 — 每天一个可落地的搞钱方法，手把手教小白赚钱",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build": "node tools/build-www.cjs",
+    "serve": "node tools/serve.cjs",
+    "smoke": "node tools/test-v4470.cjs",
+    "icons": "node tools/make-icons.cjs"
+  },
+  "keywords": [
+    "money",
+    "side-hustle",
+    "capacitor"
+  ],
+  "author": "arrowwood (https://github.com/bietou123)",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/cli": "^6.2.1",
+    "@capacitor/core": "^6.2.1",
+    "@capacitor/local-notifications": "^6.1.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
